@@ -10,11 +10,12 @@ use ratatui::{
     crossterm,
     layout::{Constraint, Direction, Layout},
     prelude::CrosstermBackend,
-    text::Line,
+    style::{Color, Style},
+    text::{Line, Span},
     widgets::{Block, Paragraph},
     Terminal,
 };
-use std::{error::Error, io};
+use std::{error::Error, io, str::FromStr};
 
 mod cursor_movement;
 mod editor;
@@ -28,6 +29,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut terminal = Terminal::new(backend)?;
     let mut editor = Editor::new();
 
+    let res = run_app(&mut terminal, &mut editor);
+
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+
+    if let Err(err) = res {
+        eprintln!("Error: {:?}", err);
+    }
+
+    Ok(())
+}
+
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    editor: &mut Editor,
+) -> Result<(), Box<dyn Error>> {
     loop {
         let (cursor_line, cursor_column) = editor.get_cursor_screen_position();
 
@@ -37,8 +58,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .direction(Direction::Vertical)
                 .constraints(
                     [
-                        Constraint::Min(1),
-                        Constraint::Length(1),
+                        Constraint::Min(1),    // Main editor area
+                        Constraint::Length(1), // Status line
                         Constraint::Length(1),
                     ]
                     .as_ref(),
@@ -47,9 +68,37 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             let content = Paragraph::new(editor.to_string()).block(Block::default());
             f.render_widget(content, chunks[0]);
-            f.set_cursor(cursor_column as u16, cursor_line as u16);
 
-            let status_line = Line::raw(format!(" {} ", editor.get_mode()));
+            f.set_cursor(
+                chunks[0].x + cursor_column as u16,
+                chunks[0].y + cursor_line as u16,
+            );
+
+            let mode_text = format!(" {} ", editor.get_mode());
+            let line_col_text = format!("{}:{} ", cursor_line + 1, cursor_column + 1);
+            let total_text_len = mode_text.len() + line_col_text.len();
+
+            let remaining_space = if chunks[1].width > total_text_len as u16 {
+                chunks[1].width as usize - total_text_len
+            } else {
+                0
+            };
+
+            let padded_status_line_text = format!(
+                "{}{:<width$}{}",
+                mode_text,
+                "",
+                line_col_text,
+                width = remaining_space
+            );
+
+            let status_line = Paragraph::new(Line::from(Span::styled(
+                padded_status_line_text,
+                Style::default().bg(Color::from_str("#202020").unwrap()),
+            )))
+            .alignment(ratatui::layout::Alignment::Left);
+
+            // Render status line
             f.render_widget(status_line, chunks[1]);
         })?;
 
@@ -73,7 +122,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         KeyCode::End => editor.move_cursor(CursorMovement::LineEnd),
                         KeyCode::PageUp => todo!(),
                         KeyCode::PageDown => todo!(),
-                        KeyCode::Tab => todo!(),
+                        KeyCode::Tab => editor.insert_str("    ".to_string()),
                         KeyCode::BackTab => todo!(),
                         KeyCode::Delete => todo!(),
                         KeyCode::Insert => todo!(),
@@ -95,12 +144,5 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
-
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
     Ok(())
 }

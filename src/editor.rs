@@ -32,6 +32,11 @@ impl Editor {
         self.content.char_to_line(self.cursor_pos)
     }
 
+    pub fn insert_str(&mut self, s: String) {
+        self.content.insert(self.cursor_pos, &s);
+        self.cursor_pos += s.len();
+    }
+
     pub fn insert(&mut self, char: char) {
         self.content.insert_char(self.cursor_pos, char);
         self.cursor_pos += 1;
