@@ -1,0 +1,8 @@
+[package]
+name = "pyne"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = "0.28.1"
+ropey = "1.6.1"
