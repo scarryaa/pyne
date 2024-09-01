@@ -51,28 +51,32 @@ fn run_app(
 ) -> Result<(), Box<dyn Error>> {
     loop {
         let (cursor_line, cursor_column) = editor.get_cursor_screen_position();
+        let (scroll_x, scroll_y) = editor.get_scroll_offset();
 
         terminal.draw(|f| {
             let area = f.area();
+
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints(
                     [
                         Constraint::Min(1),    // Main editor area
                         Constraint::Length(1), // Status line
-                        Constraint::Length(1),
+                        Constraint::Length(1), // Debug info
                     ]
                     .as_ref(),
                 )
                 .split(area);
+            editor.set_viewport((chunks[0].width as usize, chunks[0].height as usize));
 
-            let content = Paragraph::new(editor.to_string()).block(Block::default());
+            let content = Paragraph::new(editor.get_visible_content()).block(Block::default());
             f.render_widget(content, chunks[0]);
 
-            f.set_cursor(
-                chunks[0].x + cursor_column as u16,
-                chunks[0].y + cursor_line as u16,
-            );
+            // Adjust cursor position based on scroll offset
+            let cursor_screen_x = (cursor_column as i32 - scroll_x as i32).max(0) as u16;
+            let cursor_screen_y = (cursor_line as i32 - scroll_y as i32).max(0) as u16;
+
+            f.set_cursor(chunks[0].x + cursor_screen_x, chunks[0].y + cursor_screen_y);
 
             let mode_text = format!(" {} ", editor.get_mode());
             let line_col_text = format!("{}:{} ", cursor_line + 1, cursor_column + 1);
@@ -100,6 +104,9 @@ fn run_app(
 
             // Render status line
             f.render_widget(status_line, chunks[1]);
+
+            let debug_info = Paragraph::new(editor.get_debug_info());
+            f.render_widget(debug_info, chunks[2]);
         })?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
