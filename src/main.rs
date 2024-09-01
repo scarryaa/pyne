@@ -5,9 +5,12 @@ use crossterm::{
 };
 use cursor_movement::CursorMovement;
 use editor::Editor;
+use mode::Mode;
 use ratatui::{
     crossterm,
+    layout::{Constraint, Direction, Layout},
     prelude::CrosstermBackend,
+    text::Line,
     widgets::{Block, Paragraph},
     Terminal,
 };
@@ -15,6 +18,7 @@ use std::{error::Error, io};
 
 mod cursor_movement;
 mod editor;
+mod mode;
 
 fn main() -> Result<(), Box<dyn Error>> {
     enable_raw_mode()?;
@@ -29,43 +33,64 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         terminal.draw(|f| {
             let area = f.area();
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(
+                    [
+                        Constraint::Min(1),
+                        Constraint::Length(1),
+                        Constraint::Length(1),
+                    ]
+                    .as_ref(),
+                )
+                .split(area);
+
             let content = Paragraph::new(editor.to_string()).block(Block::default());
-            f.render_widget(content, area);
+            f.render_widget(content, chunks[0]);
             f.set_cursor(cursor_column as u16, cursor_line as u16);
+
+            let status_line = Line::raw(format!(" {} ", editor.get_mode()));
+            f.render_widget(status_line, chunks[1]);
         })?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Char(c) => editor.insert(c),
-                    KeyCode::Backspace => editor.delete(),
-                    KeyCode::Enter => editor.insert_new_line(),
-                    KeyCode::Left => editor.move_cursor(CursorMovement::LEFT),
-                    KeyCode::Right => editor.move_cursor(CursorMovement::RIGHT),
-                    KeyCode::Up => editor.move_cursor(CursorMovement::UP),
-                    KeyCode::Down => editor.move_cursor(CursorMovement::DOWN),
-                    KeyCode::Home => todo!(),
-                    KeyCode::End => todo!(),
-                    KeyCode::PageUp => todo!(),
-                    KeyCode::PageDown => todo!(),
-                    KeyCode::Tab => todo!(),
-                    KeyCode::BackTab => todo!(),
-                    KeyCode::Delete => todo!(),
-                    KeyCode::Insert => todo!(),
-                    KeyCode::F(_) => todo!(),
-                    KeyCode::Null => todo!(),
-                    KeyCode::Esc => todo!(),
-                    KeyCode::CapsLock => todo!(),
-                    KeyCode::ScrollLock => todo!(),
-                    KeyCode::NumLock => todo!(),
-                    KeyCode::PrintScreen => todo!(),
-                    KeyCode::Pause => todo!(),
-                    KeyCode::Menu => todo!(),
-                    KeyCode::KeypadBegin => todo!(),
-                    KeyCode::Media(_) => todo!(),
-                    KeyCode::Modifier(_) => todo!(),
-                    _ => {}
+                match editor.get_mode() {
+                    Mode::Normal => match key.code {
+                        KeyCode::Char('q') => break,
+                        KeyCode::Char('i') => editor.set_mode(Mode::Insert),
+                        _ => {}
+                    },
+                    Mode::Insert => match key.code {
+                        KeyCode::Char(c) => editor.insert(c),
+                        KeyCode::Backspace => editor.delete(),
+                        KeyCode::Enter => editor.insert_new_line(),
+                        KeyCode::Left => editor.move_cursor(CursorMovement::Left),
+                        KeyCode::Right => editor.move_cursor(CursorMovement::Right),
+                        KeyCode::Up => editor.move_cursor(CursorMovement::Up),
+                        KeyCode::Down => editor.move_cursor(CursorMovement::Down),
+                        KeyCode::Home => editor.move_cursor(CursorMovement::LineStart),
+                        KeyCode::End => editor.move_cursor(CursorMovement::LineEnd),
+                        KeyCode::PageUp => todo!(),
+                        KeyCode::PageDown => todo!(),
+                        KeyCode::Tab => todo!(),
+                        KeyCode::BackTab => todo!(),
+                        KeyCode::Delete => todo!(),
+                        KeyCode::Insert => todo!(),
+                        KeyCode::F(_) => todo!(),
+                        KeyCode::Null => todo!(),
+                        KeyCode::Esc => editor.set_mode(Mode::Normal),
+                        KeyCode::CapsLock => todo!(),
+                        KeyCode::ScrollLock => todo!(),
+                        KeyCode::NumLock => todo!(),
+                        KeyCode::PrintScreen => todo!(),
+                        KeyCode::Pause => todo!(),
+                        KeyCode::Menu => todo!(),
+                        KeyCode::KeypadBegin => todo!(),
+                        KeyCode::Media(_) => todo!(),
+                        KeyCode::Modifier(_) => todo!(),
+                        _ => {}
+                    },
                 }
             }
         }

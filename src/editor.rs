@@ -1,9 +1,10 @@
-use crate::cursor_movement::CursorMovement;
+use crate::{cursor_movement::CursorMovement, mode::Mode};
 use ropey::Rope;
 
 pub struct Editor {
     cursor_pos: usize,
     content: Rope,
+    mode: Mode,
 }
 
 impl Editor {
@@ -11,7 +12,16 @@ impl Editor {
         Self {
             cursor_pos: 0,
             content: Rope::from_str(""),
+            mode: Mode::Normal,
         }
+    }
+
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+    }
+
+    pub fn get_mode(&self) -> Mode {
+        self.mode.clone()
     }
 
     pub fn cursor_pos_to_char(&self) -> usize {
@@ -41,10 +51,12 @@ impl Editor {
 
     pub fn move_cursor(&mut self, direction: CursorMovement) {
         match direction {
-            CursorMovement::LEFT => self.move_cursor_left(),
-            CursorMovement::RIGHT => self.move_cursor_right(),
-            CursorMovement::UP => self.move_cursor_up(),
-            CursorMovement::DOWN => self.move_cursor_down(),
+            CursorMovement::Left => self.move_cursor_left(),
+            CursorMovement::Right => self.move_cursor_right(),
+            CursorMovement::Up => self.move_cursor_up(),
+            CursorMovement::Down => self.move_cursor_down(),
+            CursorMovement::LineStart => self.move_cursor_line_start(),
+            CursorMovement::LineEnd => self.move_cursor_line_end(),
         }
     }
 
@@ -57,6 +69,20 @@ impl Editor {
         let line_start = self.content.line_to_char(line);
         let column = self.cursor_pos - line_start;
         (line, column)
+    }
+
+    fn move_cursor_line_start(&mut self) {
+        let line = self.content.char_to_line(self.cursor_pos);
+        let line_start = self.content.line_to_char(line);
+
+        self.cursor_pos = line_start;
+    }
+
+    fn move_cursor_line_end(&mut self) {
+        let line = self.content.char_to_line(self.cursor_pos);
+        let line_end = self.content.line_to_char(line + 1).saturating_sub(1);
+
+        self.cursor_pos = line_end;
     }
 
     fn move_cursor_left(&mut self) {

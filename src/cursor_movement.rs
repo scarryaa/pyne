@@ -1,7 +1,8 @@
 pub enum CursorMovement {
-    LEFT,
-    RIGHT,
-    UP,
-    DOWN,
+    Left,
+    Right,
+    Up,
+    Down,
+    LineStart,
+    LineEnd,
 }
-
