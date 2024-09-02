@@ -15,6 +15,8 @@ use ratatui::{
 };
 use std::{env, error::Error, io, path::PathBuf};
 
+const SUGGESTIONS_PER_PAGE: usize = 5;
+
 mod command_bar;
 mod cursor_movement;
 mod editor;
@@ -116,6 +118,7 @@ fn render_ui(f: &mut ratatui::Frame, editor: &mut Editor, file_explorer: &mut Fi
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Min(1),    // Editor area
+                Constraint::Length(1), // Command description
                 Constraint::Length(1), // Status bar / Command bar
                 Constraint::Length(1), // Suggestions
             ])
@@ -129,8 +132,9 @@ fn render_ui(f: &mut ratatui::Frame, editor: &mut Editor, file_explorer: &mut Fi
         editor.set_viewport((editor_chunks[1].width as usize, chunks[0].height as usize));
         render_gutter(f, editor, editor_chunks[0]);
         render_content(f, editor, editor_chunks[1]);
-        render_status_line(f, editor, chunks[1]);
-        render_autocomplete_suggestions(f, editor, chunks[2]);
+        render_command_description(f, editor, chunks[1]);
+        render_status_line(f, editor, chunks[2]);
+        render_autocomplete_suggestions(f, editor, chunks[3]);
 
         // Handle Option types for cursor position and scroll offset
         if let (Some((cursor_line, cursor_column)), Some((scroll_x, scroll_y))) = (
@@ -155,40 +159,74 @@ fn render_ui(f: &mut ratatui::Frame, editor: &mut Editor, file_explorer: &mut Fi
     }
 }
 
+fn render_command_description(
+    f: &mut ratatui::Frame,
+    editor: &Editor,
+    area: ratatui::layout::Rect,
+) {
+    if editor.is_command_bar_active() {
+        if let Some(description) = editor.get_current_command_description() {
+            let description_widget =
+                Paragraph::new(description).style(Style::default().fg(Color::Yellow));
+            f.render_widget(description_widget, area);
+        }
+    }
+}
+
 fn render_autocomplete_suggestions(
     f: &mut ratatui::Frame,
     editor: &Editor,
     area: ratatui::layout::Rect,
 ) {
     if editor.is_command_bar_active() {
-        let suggestions = editor.get_command_bar_suggestions();
+        let suggestions = editor.command_bar.get_suggestions();
         let current_index = editor.get_suggestion_index();
+        let page = editor.suggestion_page;
+        let total_pages = (suggestions.len() + SUGGESTIONS_PER_PAGE - 1) / SUGGESTIONS_PER_PAGE;
+
+        let start_index = page * SUGGESTIONS_PER_PAGE;
+        let end_index = (start_index + SUGGESTIONS_PER_PAGE).min(suggestions.len());
 
         let mut spans = Vec::new();
 
-        for (index, suggestion) in suggestions.iter().enumerate() {
-            if index == current_index {
-                spans.push(ratatui::text::Span::styled(
-                    suggestion.clone(),
-                    ratatui::style::Style::default()
-                        .fg(ratatui::style::Color::Black)
-                        .bg(ratatui::style::Color::White),
+        // Add left arrow for previous page
+        if page > 0 {
+            spans.push(Span::styled("< ", Style::default().fg(Color::Yellow)));
+        }
+
+        for (index, suggestion) in suggestions[start_index..end_index].iter().enumerate() {
+            let absolute_index = start_index + index;
+            if absolute_index == current_index {
+                spans.push(Span::styled(
+                    suggestion.name.clone(),
+                    Style::default().fg(Color::Black).bg(Color::White),
                 ));
             } else {
-                spans.push(ratatui::text::Span::styled(
-                    suggestion.clone(),
-                    ratatui::style::Style::default().fg(ratatui::style::Color::Blue),
+                spans.push(Span::styled(
+                    suggestion.name.clone(),
+                    Style::default().fg(Color::Blue),
                 ));
             }
 
-            // Add a space between suggestions
-            if index < suggestions.len() - 1 {
-                spans.push(ratatui::text::Span::raw(" "));
+            if index < end_index - start_index - 1 {
+                spans.push(Span::raw(" "));
             }
         }
 
-        let suggestions_line = ratatui::text::Line::from(spans);
-        let suggestions_widget = ratatui::widgets::Paragraph::new(vec![suggestions_line]);
+        // Add right arrow for next page
+        if page < total_pages - 1 {
+            spans.push(Span::styled(" >", Style::default().fg(Color::Yellow)));
+        }
+
+        // Add page indicator
+        let page_indicator = format!(" [{}/{}]", page + 1, total_pages);
+        spans.push(Span::styled(
+            page_indicator,
+            Style::default().fg(Color::Gray),
+        ));
+
+        let suggestions_line = Line::from(spans);
+        let suggestions_widget = Paragraph::new(vec![suggestions_line]);
         f.render_widget(suggestions_widget, area);
     }
 }
@@ -348,6 +386,14 @@ fn handle_normal_mode(
             }
             KeyCode::BackTab => {
                 editor.cycle_suggestion(false);
+                Ok(false)
+            }
+            KeyCode::Right => {
+                editor.next_suggestion_page();
+                Ok(false)
+            }
+            KeyCode::Left => {
+                editor.prev_suggestion_page();
                 Ok(false)
             }
             KeyCode::Enter => {

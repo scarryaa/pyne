@@ -2,6 +2,8 @@ use crate::{command_bar::CommandBar, cursor_movement::CursorMovement, mode::Mode
 use ropey::Rope;
 use std::{collections::HashMap, env, error::Error, fs, io, path::PathBuf};
 
+const SUGGESTIONS_PER_PAGE: usize = 5;
+
 pub struct Buffer {
     content: Rope,
     cursor_pos: usize,
@@ -28,9 +30,10 @@ pub struct Editor {
     buffers: HashMap<PathBuf, Buffer>,
     current_buffer: Option<PathBuf>,
     starting_directory: Option<PathBuf>,
-    command_bar: CommandBar,
+    pub command_bar: CommandBar,
     original_command_input: String,
     suggestion_index: usize,
+    pub suggestion_page: usize,
 }
 
 impl Editor {
@@ -46,7 +49,15 @@ impl Editor {
             command_bar: CommandBar::new(),
             original_command_input: "".to_string(),
             suggestion_index: 0,
+            suggestion_page: 0,
         }
+    }
+
+    pub fn get_current_command_description(&self) -> Option<&str> {
+        self.command_bar
+            .get_suggestions()
+            .get(self.suggestion_index)
+            .map(|cmd| cmd.description.as_str())
     }
 
     pub fn get_suggestion_index(&self) -> usize {
@@ -62,18 +73,24 @@ impl Editor {
     }
 
     pub fn cycle_suggestion(&mut self, forward: bool) {
-        let suggestions = self.get_command_bar_suggestions();
+        let suggestions = self.command_bar.get_suggestions();
         if !suggestions.is_empty() {
+            let total_suggestions = suggestions.len();
             if forward {
-                self.suggestion_index = (self.suggestion_index + 1) % suggestions.len();
+                self.suggestion_index = (self.suggestion_index + 1) % total_suggestions;
             } else {
                 self.suggestion_index =
-                    (self.suggestion_index + suggestions.len() - 1) % suggestions.len();
+                    (self.suggestion_index + total_suggestions - 1) % total_suggestions;
             }
-            // Update the command bar input, but keep the original input
-            self.original_command_input = self.command_bar.get_input().to_string();
-            let new_input = format!("{}", suggestions[self.suggestion_index]);
-            self.command_bar.set_input(new_input);
+
+            // Update page if necessary
+            self.suggestion_page = self.suggestion_index / SUGGESTIONS_PER_PAGE;
+
+            // Update the command bar input
+            if let Some(cmd) = suggestions.get(self.suggestion_index) {
+                let new_input = format!("{}", cmd.name);
+                self.command_bar.set_input(new_input);
+            }
         }
     }
 
@@ -117,8 +134,12 @@ impl Editor {
         }
     }
 
-    pub fn get_command_bar_suggestions(&self) -> Vec<String> {
-        self.command_bar.get_suggestions().to_vec()
+    pub fn get_command_bar_suggestions(&self) -> Vec<&str> {
+        self.command_bar
+            .get_suggestions()
+            .iter()
+            .map(|cmd| cmd.name.as_str())
+            .collect()
     }
 
     pub fn set_command_bar_input(&mut self, input: String) {
@@ -150,7 +171,7 @@ impl Editor {
         result
     }
 
-    fn process_command(&mut self, command: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    pub fn process_command(&mut self, command: &str) -> Result<bool, Box<dyn std::error::Error>> {
         match command {
             "q" => {
                 if self.has_unsaved_changes() {
@@ -176,11 +197,73 @@ impl Editor {
                 self.show_error("File saved successfully.".to_string());
                 Ok(false)
             }
+            "wq" => {
+                if let Some(path) = self.get_current_file_path() {
+                    self.save_file(&path)?;
+                    Ok(true) // Signal to quit after saving
+                } else {
+                    self.show_error(
+                        "No file path set. Use :w <filename> to save before quitting.".to_string(),
+                    );
+                    Ok(false)
+                }
+            }
+            cmd if cmd.starts_with("e ") => {
+                let path = PathBuf::from(&cmd[2..]);
+                match self.open_file(&path) {
+                    Ok(_) => {
+                        self.show_error(format!("Opened file: {:?}", path));
+                        Ok(false)
+                    }
+                    Err(e) => {
+                        self.show_error(format!("Failed to open file: {:?}. Error: {}", path, e));
+                        Ok(false)
+                    }
+                }
+            }
+            "help" => {
+                self.show_help();
+                Ok(false)
+            }
+            cmd if cmd.starts_with("set ") => {
+                self.handle_set_command(&cmd[4..]);
+                Ok(false)
+            }
+            "split" => {
+                self.show_error("Split view not implemented yet.".to_string());
+                Ok(false)
+            }
+            "vsplit" => {
+                self.show_error("Vertical split view not implemented yet.".to_string());
+                Ok(false)
+            }
             _ => {
                 self.show_error(format!("Unknown command: {}", command));
                 Ok(false)
             }
         }
+    }
+
+    fn show_help(&mut self) {
+        let help_text = r#"Available commands:
+:q - Quit (if no unsaved changes)
+:q! - Force quit
+:w - Save current file
+:w <filename> - Save as <filename>
+:wq - Save and quit
+:e <filename> - Edit <filename>
+:help - Show this help message
+:set <option> - Set editor option
+:split - Split view horizontally (not implemented)
+:vsplit - Split view vertically (not implemented)"#;
+        self.show_error(help_text.to_string());
+    }
+
+    fn handle_set_command(&mut self, option: &str) {
+        self.show_error(format!(
+            "Setting option: {}. (Not actually implemented)",
+            option
+        ));
     }
 
     pub fn get_starting_directory(&self) -> Option<&PathBuf> {
@@ -481,6 +564,22 @@ impl Editor {
         } else {
             String::from("No active buffer")
         }
+    }
+
+    pub fn next_suggestion_page(&mut self) {
+        let total_pages = (self.get_command_bar_suggestions().len() + SUGGESTIONS_PER_PAGE - 1)
+            / SUGGESTIONS_PER_PAGE;
+        self.suggestion_page = (self.suggestion_page + 1) % total_pages;
+    }
+
+    pub fn prev_suggestion_page(&mut self) {
+        let total_pages = (self.get_command_bar_suggestions().len() + SUGGESTIONS_PER_PAGE - 1)
+            / SUGGESTIONS_PER_PAGE;
+        self.suggestion_page = (self.suggestion_page + total_pages - 1) % total_pages;
+    }
+
+    pub fn reset_suggestion_page(&mut self) {
+        self.suggestion_page = 0;
     }
 
     pub fn has_unsaved_changes(&self) -> bool {

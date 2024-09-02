@@ -1,11 +1,12 @@
-use std::path::PathBuf;
-
-use crate::editor::Editor;
+pub struct Command {
+    pub name: String,
+    pub description: String,
+}
 
 pub struct CommandBar {
     input: String,
     active: bool,
-    suggestions: Vec<String>,
+    suggestions: Vec<Command>,
 }
 
 impl CommandBar {
@@ -25,17 +26,56 @@ impl CommandBar {
     }
 
     pub fn update_suggestions(&mut self) {
-        let commands = vec!["q", "q!", "w", "wq", "e", "help", "set", "split", "vsplit"];
-        self.suggestions = commands.into_iter().map(String::from).collect();
+        let all_commands = vec![
+            Command {
+                name: "q".to_string(),
+                description: "Quit the editor".to_string(),
+            },
+            Command {
+                name: "q!".to_string(),
+                description: "Force quit without saving".to_string(),
+            },
+            Command {
+                name: "w".to_string(),
+                description: "Save the current file".to_string(),
+            },
+            Command {
+                name: "wq".to_string(),
+                description: "Save and quit".to_string(),
+            },
+            Command {
+                name: "e".to_string(),
+                description: "Edit a file".to_string(),
+            },
+            Command {
+                name: "help".to_string(),
+                description: "Show help information".to_string(),
+            },
+            Command {
+                name: "set".to_string(),
+                description: "Set editor options".to_string(),
+            },
+            Command {
+                name: "split".to_string(),
+                description: "Split the window horizontally".to_string(),
+            },
+            Command {
+                name: "vsplit".to_string(),
+                description: "Split the window vertically".to_string(),
+            },
+        ];
+
+        self.suggestions = all_commands.into_iter().collect();
     }
 
-    pub fn get_suggestions(&self) -> &[String] {
+    pub fn get_suggestions(&self) -> &[Command] {
         &self.suggestions
     }
 
     pub fn activate(&mut self) {
         self.active = true;
         self.input.clear();
+        self.update_suggestions();
     }
 
     pub fn deactivate(&mut self) {
@@ -49,10 +89,12 @@ impl CommandBar {
 
     pub fn input(&mut self, c: char) {
         self.input.push(c);
+        self.update_suggestions();
     }
 
     pub fn backspace(&mut self) {
         self.input.pop();
+        self.update_suggestions();
     }
 
     pub fn get_input(&self) -> &str {
