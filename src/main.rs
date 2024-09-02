@@ -5,9 +5,10 @@ use crossterm::{
 };
 use cursor_movement::CursorMovement;
 use editor::Editor;
+use gutter::Gutter;
 use mode::Mode;
 use ratatui::{
-    crossterm,
+    crossterm::{self, event::KeyModifiers},
     layout::{Constraint, Direction, Layout},
     prelude::CrosstermBackend,
     style::{Color, Style},
@@ -19,6 +20,7 @@ use std::{error::Error, io, str::FromStr};
 
 mod cursor_movement;
 mod editor;
+mod gutter;
 mod mode;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -56,7 +58,7 @@ fn run_app(
         terminal.draw(|f| {
             let area = f.area();
 
-            let chunks = Layout::default()
+            let vertical_chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints(
                     [
@@ -67,54 +69,60 @@ fn run_app(
                     .as_ref(),
                 )
                 .split(area);
-            editor.set_viewport((chunks[0].width as usize, chunks[0].height as usize));
+
+            let horizontal_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(
+                    [
+                        Constraint::Length(6), // Gutter
+                        Constraint::Min(1),    // Main editor area
+                    ]
+                    .as_ref(),
+                )
+                .split(vertical_chunks[0]);
+
+            editor.set_viewport((
+                horizontal_chunks[1].width as usize,
+                vertical_chunks[0].height as usize,
+            ));
+
+            let line_numbers = Gutter::get_visible_line_numbers(editor);
+            let gutter_content = Paragraph::new(line_numbers.join("\n"))
+                .style(Style::default().fg(Color::from_u32(0x404040)));
+            f.render_widget(gutter_content, horizontal_chunks[0]);
 
             let content = Paragraph::new(editor.get_visible_content()).block(Block::default());
-            f.render_widget(content, chunks[0]);
+            f.render_widget(content, horizontal_chunks[1]);
 
-            // Adjust cursor position based on scroll offset
             let cursor_screen_x = (cursor_column as i32 - scroll_x as i32).max(0) as u16;
             let cursor_screen_y = (cursor_line as i32 - scroll_y as i32).max(0) as u16;
 
-            f.set_cursor(chunks[0].x + cursor_screen_x, chunks[0].y + cursor_screen_y);
-
-            let mode_text = format!(" {} ", editor.get_mode());
-            let line_col_text = format!("{}:{} ", cursor_line + 1, cursor_column + 1);
-            let total_text_len = mode_text.len() + line_col_text.len();
-
-            let remaining_space = if chunks[1].width > total_text_len as u16 {
-                chunks[1].width as usize - total_text_len
-            } else {
-                0
-            };
-
-            let padded_status_line_text = format!(
-                "{}{:<width$}{}",
-                mode_text,
-                "",
-                line_col_text,
-                width = remaining_space
+            f.set_cursor(
+                horizontal_chunks[1].x + cursor_screen_x,
+                vertical_chunks[0].y + cursor_screen_y,
             );
 
-            let status_line = Paragraph::new(Line::from(Span::styled(
-                padded_status_line_text,
-                Style::default().bg(Color::from_str("#202020").unwrap()),
-            )))
-            .alignment(ratatui::layout::Alignment::Left);
-
             // Render status line
-            f.render_widget(status_line, chunks[1]);
+            let mode_text = format!(" {} ", editor.get_mode());
+            let line_col_text = format!("{}:{} ", cursor_line + 1, cursor_column + 1);
+            let status_line = Paragraph::new(mode_text + &line_col_text)
+                .style(Style::default().bg(Color::from_u32(0x202020)));
+            f.render_widget(status_line, vertical_chunks[1]);
 
-            let debug_info = Paragraph::new(editor.get_debug_info());
-            f.render_widget(debug_info, chunks[2]);
+            // Render debug info if enabled
+            if editor.is_debug_info_visible() {
+                let debug_info = Paragraph::new(editor.get_debug_info());
+                f.render_widget(debug_info, vertical_chunks[2]);
+            }
         })?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 match editor.get_mode() {
-                    Mode::Normal => match key.code {
-                        KeyCode::Char('q') => break,
-                        KeyCode::Char('i') => editor.set_mode(Mode::Insert),
+                    Mode::Normal => match (key.modifiers, key.code) {
+                        (KeyModifiers::NONE, KeyCode::Char('q')) => break,
+                        (KeyModifiers::NONE, KeyCode::Char('i')) => editor.set_mode(Mode::Insert),
+                        (KeyModifiers::SHIFT, KeyCode::Char('D')) => editor.toggle_debug_info(),
                         _ => {}
                     },
                     Mode::Insert => match key.code {

@@ -7,6 +7,7 @@ pub struct Editor {
     mode: Mode,
     viewport: (usize, usize),
     scroll_offset: (usize, usize),
+    show_debug_info: bool,
 }
 
 impl Editor {
@@ -17,7 +18,12 @@ impl Editor {
             mode: Mode::Normal,
             viewport: (80, 24),
             scroll_offset: (0, 0),
+            show_debug_info: false,
         }
+    }
+
+    pub fn get_content(&self) -> Rope {
+        self.content.clone()
     }
 
     pub fn set_mode(&mut self, mode: Mode) {
@@ -26,6 +32,10 @@ impl Editor {
 
     pub fn get_mode(&self) -> Mode {
         self.mode.clone()
+    }
+
+    pub fn get_viewport(&self) -> (usize, usize) {
+        self.viewport
     }
 
     pub fn set_viewport(&mut self, viewport: (usize, usize)) {
@@ -119,21 +129,25 @@ impl Editor {
     pub fn get_visible_content(&self) -> String {
         let (scroll_x, scroll_y) = self.scroll_offset;
         let (viewport_width, viewport_height) = self.viewport;
-        let mut result = String::new();
-        for line_idx in scroll_y..scroll_y + viewport_height {
-            if line_idx < self.content.len_lines() {
+        let max_line_idx = self.content.len_lines().min(scroll_y + viewport_height);
+
+        (scroll_y..max_line_idx)
+            .map(|line_idx| {
                 let line = self.content.line(line_idx);
-                if scroll_x >= line.len_chars() {
-                    // If the entire line is scrolled off to the left, add a newline
-                    result.push('\n');
+                let visible_line: String =
+                    line.chars().skip(scroll_x).take(viewport_width).collect();
+
+                if line_idx == self.cursor_pos {
+                    visible_line
+                } else if scroll_x >= line.len_chars().saturating_sub(1)
+                    && line.len_chars() < viewport_width
+                {
+                    String::from("\n")
                 } else {
-                    let visible_line: String =
-                        line.chars().skip(scroll_x).take(viewport_width).collect();
-                    result.push_str(&visible_line);
+                    format!("{}\n", visible_line.trim_end())
                 }
-            }
-        }
-        result
+            })
+            .collect()
     }
 
     pub fn get_cursor_screen_position(&self) -> (usize, usize) {
@@ -192,6 +206,14 @@ impl Editor {
             let next_line_len = self.content.line(next_line).len_chars();
             self.cursor_pos = next_line_start + cur_col.min(next_line_len);
         }
+    }
+
+    pub fn toggle_debug_info(&mut self) {
+        self.show_debug_info = !self.show_debug_info;
+    }
+
+    pub fn is_debug_info_visible(&self) -> bool {
+        self.show_debug_info
     }
 
     pub fn get_debug_info(&self) -> String {
