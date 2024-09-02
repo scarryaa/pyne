@@ -4,10 +4,17 @@ pub struct Gutter;
 
 impl Gutter {
     pub fn get_visible_line_numbers(editor: &Editor) -> Vec<String> {
-        let (_, scroll_y) = editor.get_scroll_offset();
-        let (_, viewport_height) = editor.get_viewport();
-        let total_lines = editor.get_content().len_lines();
+        let (_, scroll_y) = match editor.get_scroll_offset() {
+            Some((x, y)) => (x, y),
+            None => (0, 0),
+        };
 
+        let (_, viewport_height) = match editor.get_viewport() {
+            (width, height) => (width, height),
+        };
+
+        let content = editor.get_content().unwrap_or_default();
+        let total_lines = content.len_lines();
         let start_line = scroll_y;
         let end_line = (scroll_y + viewport_height).min(total_lines);
 

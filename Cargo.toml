@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0.86"
 ratatui = "0.28.1"
 ropey = "1.6.1"
 unicode-width = "0.1.13"
+uuid = { version = "1.10.0", features = ["v4"] }

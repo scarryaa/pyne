@@ -1,4 +1,5 @@
 use ratatui::{
+    crossterm::style::SetAttribute,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
@@ -22,6 +23,7 @@ pub struct FileExplorer {
     search_query: String,
     search_mode: bool,
     global_search: bool,
+    error_message: Option<String>,
 }
 
 impl FileExplorer {
@@ -36,9 +38,38 @@ impl FileExplorer {
             search_query: String::new(),
             search_mode: false,
             global_search: false,
+            error_message: None,
         };
         explorer.refresh_entries()?;
         Ok(explorer)
+    }
+
+    pub fn set_starting_directory(&mut self, p: PathBuf) {
+        self.starting_path = p;
+    }
+
+    pub fn set_current_directory(&mut self, path: PathBuf) -> io::Result<()> {
+        self.current_path = fs::canonicalize(path)?;
+        self.refresh_entries()
+    }
+
+    pub fn open_current_file_directory(&mut self, current_file: Option<&Path>) -> io::Result<()> {
+        if let Some(file_path) = current_file {
+            if let Some(parent) = file_path.parent() {
+                self.current_path = fs::canonicalize(parent)?;
+                self.refresh_entries()?;
+            }
+        }
+        self.open = true;
+        Ok(())
+    }
+
+    pub fn clear_error_message(&mut self) {
+        self.error_message = None;
+    }
+
+    pub fn show_error(&mut self, message: &str) {
+        self.error_message = Some(message.to_string());
     }
 
     fn get_relative_path(&self) -> String {
@@ -283,7 +314,7 @@ impl FileExplorer {
             .constraints([
                 Constraint::Min(3),    // Main content
                 Constraint::Length(1), // Instruction bar
-                Constraint::Length(1), // Spacer
+                Constraint::Length(1), // Error message
             ])
             .split(area);
 
@@ -345,19 +376,39 @@ impl FileExplorer {
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(search_bar, explorer_area[2]);
 
-        // Render instruction bar with wrapping
+        // Render instruction bar
         let instructions =
-        " / - Search | ESC - Exit | ↑↓ - Navigate | ENTER - Select | G - Toggle Global Search | BACKSPACE - Previous Directory";
+    " / - Search | ESC - Exit | ↑↓ - Navigate | ENTER - Select | G - Toggle Global Search | BACKSPACE - Previous Directory";
         let instruction_bar = Paragraph::new(instructions)
             .style(
                 Style::default()
                     .bg(Color::from_u32(0x202020))
                     .fg(Color::White),
             )
-            .wrap(Wrap { trim: false }); // Enable text wrapping
+            .wrap(Wrap { trim: false });
         f.render_widget(instruction_bar, main_layout[1]);
+
+        // Render error message
+        if let Some(ref error_message) = self.error_message {
+            let error_bar =
+                Paragraph::new(error_message.as_str()).style(Style::default().fg(Color::Red));
+            f.render_widget(error_bar, main_layout[2]);
+        }
     }
 
+    pub fn is_binary_or_non_utf8(&self, path: &Path) -> io::Result<bool> {
+        let mut file = File::open(path)?;
+        let mut content = Vec::new();
+
+        // Read the entire file content into a vector
+        file.read_to_end(&mut content)?;
+
+        // Check if the content is valid UTF-8
+        match std::str::from_utf8(&content) {
+            Ok(_) => Ok(false),
+            Err(_) => Ok(true),
+        }
+    }
     pub fn close(&mut self) -> io::Result<()> {
         self.open = false;
         self.clear_search()
