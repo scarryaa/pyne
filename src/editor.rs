@@ -1,39 +1,21 @@
-use crate::{command_bar::CommandBar, cursor_movement::CursorMovement, mode::Mode};
+use crate::{
+    buffer::Buffer,
+    cursor_movement::CursorMovement,
+    error_handler::{clear_error, set_error},
+    mode::Mode,
+};
+use clipboard::{ClipboardContext, ClipboardProvider};
 use ropey::Rope;
 use std::{collections::HashMap, env, error::Error, fs, io, path::PathBuf};
-
-const SUGGESTIONS_PER_PAGE: usize = 5;
-
-pub struct Buffer {
-    content: Rope,
-    cursor_pos: usize,
-    scroll_offset: (usize, usize),
-    is_modified: bool,
-}
-
-impl Buffer {
-    fn new() -> Self {
-        Self {
-            content: Rope::new(),
-            cursor_pos: 0,
-            scroll_offset: (0, 0),
-            is_modified: false,
-        }
-    }
-}
 
 pub struct Editor {
     mode: Mode,
     viewport: (usize, usize),
     show_debug_info: bool,
-    pub error_message: Option<String>,
     buffers: HashMap<PathBuf, Buffer>,
     current_buffer: Option<PathBuf>,
     starting_directory: Option<PathBuf>,
-    pub command_bar: CommandBar,
-    original_command_input: String,
-    suggestion_index: usize,
-    pub suggestion_page: usize,
+    clipboard: Option<ClipboardContext>,
 }
 
 impl Editor {
@@ -42,76 +24,64 @@ impl Editor {
             mode: Mode::Normal,
             viewport: (80, 24),
             show_debug_info: false,
-            error_message: None,
             buffers: HashMap::new(),
             current_buffer: None,
             starting_directory: None,
-            command_bar: CommandBar::new(),
-            original_command_input: "".to_string(),
-            suggestion_index: 0,
-            suggestion_page: 0,
+            clipboard: ClipboardContext::new().ok(),
         }
     }
 
-    pub fn get_current_command_description(&self) -> Option<&str> {
-        self.command_bar
-            .get_suggestions()
-            .get(self.suggestion_index)
-            .map(|cmd| cmd.description.as_str())
-    }
-
-    pub fn get_suggestion_index(&self) -> usize {
-        self.suggestion_index
-    }
-
-    pub fn set_suggestion_index(&mut self, index: usize) {
-        self.suggestion_index = index;
-    }
-
-    pub fn reset_suggestion_index(&mut self) {
-        self.suggestion_index = 0;
-    }
-
-    pub fn cycle_suggestion(&mut self, forward: bool) {
-        let suggestions = self.command_bar.get_suggestions();
-        if !suggestions.is_empty() {
-            let total_suggestions = suggestions.len();
-            if forward {
-                self.suggestion_index = (self.suggestion_index + 1) % total_suggestions;
-            } else {
-                self.suggestion_index =
-                    (self.suggestion_index + total_suggestions - 1) % total_suggestions;
-            }
-
-            // Update page if necessary
-            self.suggestion_page = self.suggestion_index / SUGGESTIONS_PER_PAGE;
-
-            // Update the command bar input
-            if let Some(cmd) = suggestions.get(self.suggestion_index) {
-                let new_input = format!("{}", cmd.name);
-                self.command_bar.set_input(new_input);
-            }
+    pub fn copy_to_clipboard(&mut self, text: &str) -> Result<(), Box<dyn Error>> {
+        if let Some(clipboard) = &mut self.clipboard {
+            clipboard.set_contents(text.to_owned())?;
+            Ok(())
+        } else {
+            Err("Clipboard not available".into())
         }
     }
 
-    pub fn reset_to_original_input(&mut self) {
-        self.command_bar
-            .set_input(self.original_command_input.clone());
-        self.suggestion_index = 0;
+    pub fn enter_visual_mode(&mut self) {
+        if let Some(buffer) = self.get_current_buffer_mut() {
+            buffer.selection_start = Some(buffer.cursor_pos);
+            self.set_mode(Mode::Visual);
+        }
     }
 
-    pub fn command_bar_input(&mut self, c: char) {
-        self.command_bar.input(c);
-        self.original_command_input = self.command_bar.get_input().to_string();
-        self.command_bar.update_suggestions();
-        self.suggestion_index = 0;
+    pub fn exit_visual_mode(&mut self) {
+        if let Some(buffer) = self.get_current_buffer_mut() {
+            buffer.selection_start = None;
+            self.set_mode(Mode::Normal);
+        }
     }
 
-    pub fn command_bar_backspace(&mut self) {
-        self.command_bar.backspace();
-        self.original_command_input = self.command_bar.get_input().to_string();
-        self.command_bar.update_suggestions();
-        self.suggestion_index = 0;
+    pub fn get_selection(&self) -> Option<(usize, usize)> {
+        self.get_current_buffer().and_then(|buffer| {
+            buffer.selection_start.map(|start| {
+                let end = buffer.cursor_pos;
+                (start.min(end), start.max(end))
+            })
+        })
+    }
+
+    pub fn delete_selection(&mut self) {
+        if let Some(buffer) = self.get_current_buffer_mut() {
+            if let Some(selection_start) = buffer.selection_start {
+                let start = selection_start.min(buffer.cursor_pos);
+                let end = selection_start.max(buffer.cursor_pos);
+                buffer.content.remove(start..end);
+                buffer.cursor_pos = start;
+                buffer.is_modified = true;
+                buffer.selection_start = None;
+            }
+        }
+        self.set_mode(Mode::Normal);
+    }
+
+    pub fn copy_selection(&self) -> Option<String> {
+        self.get_current_buffer().and_then(|buffer| {
+            self.get_selection()
+                .map(|(start, end)| buffer.content.slice(start..end).to_string())
+        })
     }
 
     pub fn save_file(&mut self, path: &PathBuf) -> io::Result<()> {
@@ -134,133 +104,8 @@ impl Editor {
         }
     }
 
-    pub fn get_command_bar_suggestions(&self) -> Vec<&str> {
-        self.command_bar
-            .get_suggestions()
-            .iter()
-            .map(|cmd| cmd.name.as_str())
-            .collect()
-    }
-
-    pub fn set_command_bar_input(&mut self, input: String) {
-        self.command_bar.set_input(input);
-        self.command_bar.update_suggestions();
-    }
-
-    pub fn command_bar_activate(&mut self) {
-        self.command_bar.activate();
-        self.command_bar.update_suggestions();
-    }
-
-    pub fn command_bar_deactivate(&mut self) {
-        self.command_bar.deactivate();
-    }
-
-    pub fn is_command_bar_active(&self) -> bool {
-        self.command_bar.is_active()
-    }
-
-    pub fn get_command_bar_input(&self) -> &str {
-        self.command_bar.get_input()
-    }
-
-    pub fn execute_command(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
-        let command = self.command_bar.take_input();
-        let result = self.process_command(&command);
-        self.command_bar.deactivate();
-        result
-    }
-
-    pub fn process_command(&mut self, command: &str) -> Result<bool, Box<dyn std::error::Error>> {
-        match command {
-            "q" => {
-                if self.has_unsaved_changes() {
-                    self.show_error("Unsaved changes. Use :q! to force quit.".to_string());
-                    Ok(false)
-                } else {
-                    Ok(true) // Signal to quit the application
-                }
-            }
-            "q!" => Ok(true), // Force quit
-            "w" => {
-                if let Some(path) = self.get_current_file_path() {
-                    self.save_file(&path)?;
-                    self.show_error("File saved successfully.".to_string());
-                } else {
-                    self.show_error("No file path set. Use :w <filename> to save.".to_string());
-                }
-                Ok(false)
-            }
-            cmd if cmd.starts_with("w ") => {
-                let path = PathBuf::from(&cmd[2..]);
-                self.save_file(&path)?;
-                self.show_error("File saved successfully.".to_string());
-                Ok(false)
-            }
-            "wq" => {
-                if let Some(path) = self.get_current_file_path() {
-                    self.save_file(&path)?;
-                    Ok(true) // Signal to quit after saving
-                } else {
-                    self.show_error(
-                        "No file path set. Use :w <filename> to save before quitting.".to_string(),
-                    );
-                    Ok(false)
-                }
-            }
-            cmd if cmd.starts_with("e ") => {
-                let path = PathBuf::from(&cmd[2..]);
-                match self.open_file(&path) {
-                    Ok(_) => {
-                        self.show_error(format!("Opened file: {:?}", path));
-                        Ok(false)
-                    }
-                    Err(e) => {
-                        self.show_error(format!("Failed to open file: {:?}. Error: {}", path, e));
-                        Ok(false)
-                    }
-                }
-            }
-            "help" => {
-                self.show_help();
-                Ok(false)
-            }
-            cmd if cmd.starts_with("set ") => {
-                self.handle_set_command(&cmd[4..]);
-                Ok(false)
-            }
-            "split" => {
-                self.show_error("Split view not implemented yet.".to_string());
-                Ok(false)
-            }
-            "vsplit" => {
-                self.show_error("Vertical split view not implemented yet.".to_string());
-                Ok(false)
-            }
-            _ => {
-                self.show_error(format!("Unknown command: {}", command));
-                Ok(false)
-            }
-        }
-    }
-
-    fn show_help(&mut self) {
-        let help_text = r#"Available commands:
-:q - Quit (if no unsaved changes)
-:q! - Force quit
-:w - Save current file
-:w <filename> - Save as <filename>
-:wq - Save and quit
-:e <filename> - Edit <filename>
-:help - Show this help message
-:set <option> - Set editor option
-:split - Split view horizontally (not implemented)
-:vsplit - Split view vertically (not implemented)"#;
-        self.show_error(help_text.to_string());
-    }
-
-    fn handle_set_command(&mut self, option: &str) {
-        self.show_error(format!(
+    pub fn handle_set_command(&mut self, option: &str) {
+        set_error(format!(
             "Setting option: {}. (Not actually implemented)",
             option
         ));
@@ -275,7 +120,7 @@ impl Editor {
     }
 
     pub fn clear_error_message(&mut self) {
-        self.error_message = None;
+        clear_error();
     }
 
     pub fn get_current_file_path(&self) -> Option<PathBuf> {
@@ -344,16 +189,6 @@ impl Editor {
         }
     }
 
-    pub fn cursor_pos_to_char(&self) -> Option<usize> {
-        self.get_current_buffer()
-            .map(|buffer| buffer.content.char_to_byte(buffer.cursor_pos))
-    }
-
-    pub fn cursor_pos_to_line(&self) -> Option<usize> {
-        self.get_current_buffer()
-            .map(|buffer| buffer.content.char_to_line(buffer.cursor_pos))
-    }
-
     pub fn insert_str(&mut self, s: String) {
         if let Some(buffer) = self.get_current_buffer_mut() {
             buffer.content.insert(buffer.cursor_pos, &s);
@@ -408,11 +243,6 @@ impl Editor {
         }
     }
 
-    pub fn to_string(&self) -> Option<String> {
-        self.get_current_buffer()
-            .map(|buffer| buffer.content.to_string())
-    }
-
     pub fn get_visible_content(&self) -> Option<String> {
         self.get_current_buffer().map(|buffer| {
             let (scroll_x, scroll_y) = buffer.scroll_offset;
@@ -464,7 +294,7 @@ impl Editor {
         // Ensure the configuration directory exists
         if !config_dir.exists() {
             if let Err(e) = fs::create_dir_all(&config_dir) {
-                self.show_error(format!(
+                set_error(format!(
                     "Failed to create config directory: {}",
                     config_dir.display()
                 ));
@@ -508,10 +338,6 @@ impl Editor {
         }
     }
 
-    pub fn show_error(&mut self, message: String) {
-        self.error_message = Some(message);
-    }
-
     pub fn get_cursor_screen_position(&self) -> Option<(usize, usize)> {
         self.get_current_buffer().map(|buffer| {
             let line = buffer.content.char_to_line(buffer.cursor_pos);
@@ -537,6 +363,7 @@ impl Editor {
             cursor_pos: 0,
             scroll_offset: (0, 0),
             is_modified: false,
+            selection_start: Some(0),
         };
         self.buffers.insert(resolved_path.clone(), buffer);
         self.current_buffer = Some(resolved_path);
@@ -545,41 +372,6 @@ impl Editor {
 
     pub fn toggle_debug_info(&mut self) {
         self.show_debug_info = !self.show_debug_info;
-    }
-
-    pub fn is_debug_info_visible(&self) -> bool {
-        self.show_debug_info
-    }
-
-    pub fn get_debug_info(&self) -> String {
-        if let Some(buffer) = self.get_current_buffer() {
-            format!(
-                "Cursor: {}, Viewport: {:?}, Scroll: {:?}, Content length: {}, Lines: {}",
-                buffer.cursor_pos,
-                self.viewport,
-                buffer.scroll_offset,
-                buffer.content.len_chars(),
-                buffer.content.len_lines()
-            )
-        } else {
-            String::from("No active buffer")
-        }
-    }
-
-    pub fn next_suggestion_page(&mut self) {
-        let total_pages = (self.get_command_bar_suggestions().len() + SUGGESTIONS_PER_PAGE - 1)
-            / SUGGESTIONS_PER_PAGE;
-        self.suggestion_page = (self.suggestion_page + 1) % total_pages;
-    }
-
-    pub fn prev_suggestion_page(&mut self) {
-        let total_pages = (self.get_command_bar_suggestions().len() + SUGGESTIONS_PER_PAGE - 1)
-            / SUGGESTIONS_PER_PAGE;
-        self.suggestion_page = (self.suggestion_page + total_pages - 1) % total_pages;
-    }
-
-    pub fn reset_suggestion_page(&mut self) {
-        self.suggestion_page = 0;
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
@@ -594,7 +386,7 @@ impl Editor {
             .collect()
     }
 
-    fn get_current_buffer(&self) -> Option<&Buffer> {
+    pub fn get_current_buffer(&self) -> Option<&Buffer> {
         self.current_buffer
             .as_ref()
             .and_then(|path| self.buffers.get(path))

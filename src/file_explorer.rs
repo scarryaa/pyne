@@ -1,5 +1,4 @@
 use ratatui::{
-    crossterm::style::SetAttribute,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
@@ -13,6 +12,8 @@ use std::{
     fs::{self, File},
 };
 
+use crate::error_handler::{clear_error, set_error};
+
 pub struct FileExplorer {
     starting_path: PathBuf,
     current_path: PathBuf,
@@ -23,7 +24,6 @@ pub struct FileExplorer {
     search_query: String,
     search_mode: bool,
     global_search: bool,
-    error_message: Option<String>,
 }
 
 impl FileExplorer {
@@ -38,7 +38,6 @@ impl FileExplorer {
             search_query: String::new(),
             search_mode: false,
             global_search: false,
-            error_message: None,
         };
         explorer.refresh_entries()?;
         Ok(explorer)
@@ -65,11 +64,11 @@ impl FileExplorer {
     }
 
     pub fn clear_error_message(&mut self) {
-        self.error_message = None;
+        clear_error();
     }
 
     pub fn show_error(&mut self, message: &str) {
-        self.error_message = Some(message.to_string());
+        set_error(message.to_string());
     }
 
     fn get_relative_path(&self) -> String {
@@ -81,10 +80,6 @@ impl FileExplorer {
 
     pub fn is_in_search_mode(&self) -> bool {
         self.search_mode
-    }
-
-    pub fn search_empty(&self) -> bool {
-        self.search_query.to_string().len() == 0
     }
 
     pub fn toggle_global_search(&mut self) -> io::Result<()> {
@@ -387,13 +382,6 @@ impl FileExplorer {
             )
             .wrap(Wrap { trim: false });
         f.render_widget(instruction_bar, main_layout[1]);
-
-        // Render error message
-        if let Some(ref error_message) = self.error_message {
-            let error_bar =
-                Paragraph::new(error_message.as_str()).style(Style::default().fg(Color::Red));
-            f.render_widget(error_bar, main_layout[2]);
-        }
     }
 
     pub fn is_binary_or_non_utf8(&self, path: &Path) -> io::Result<bool> {
@@ -408,10 +396,6 @@ impl FileExplorer {
             Ok(_) => Ok(false),
             Err(_) => Ok(true),
         }
-    }
-    pub fn close(&mut self) -> io::Result<()> {
-        self.open = false;
-        self.clear_search()
     }
 
     fn render_file_list(&mut self, f: &mut Frame, area: Rect) {

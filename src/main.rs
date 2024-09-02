@@ -1,27 +1,32 @@
+use command_bar::CommandBar;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use error_handler::{clear_error, set_error};
 use file_explorer::FileExplorer;
 use ratatui::{
     backend::CrosstermBackend,
     crossterm,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Position},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph},
+    widgets::Paragraph,
     Terminal,
 };
 use std::{env, error::Error, io, path::PathBuf};
 
 const SUGGESTIONS_PER_PAGE: usize = 5;
 
+mod buffer;
 mod command_bar;
 mod cursor_movement;
 mod editor;
+mod error_handler;
 mod file_explorer;
 mod gutter;
+mod help_handler;
 mod mode;
 
 use cursor_movement::CursorMovement;
@@ -44,10 +49,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Open the file if it exists or initialize a scratch buffer
     if file_path.exists() {
         if let Err(err) = editor.open_file(&file_path) {
-            editor.show_error(format!("Failed to open file: {:?}", err));
+            set_error(format!("Failed to open file: {:?}", err));
         }
     } else if !default_file_path.is_empty() {
-        editor.show_error(format!("File does not exist: {:?}", file_path.display()));
+        set_error(format!("File does not exist: {:?}", file_path.display()));
     } else {
         editor.new_scratch_buffer()?;
         editor.set_starting_directory(starting_directory.clone());
@@ -97,11 +102,13 @@ fn run_app(
     editor: &mut Editor,
     file_explorer: &mut FileExplorer,
 ) -> Result<(), Box<dyn Error>> {
+    let mut command_bar = CommandBar::new();
+
     loop {
-        terminal.draw(|f| render_ui(f, editor, file_explorer))?;
+        terminal.draw(|f| render_ui(f, editor, file_explorer, &command_bar))?;
 
         if let Event::Key(key) = event::read()? {
-            if handle_input(editor, file_explorer, key)? {
+            if handle_input(editor, file_explorer, &mut command_bar, key)? {
                 break;
             }
         }
@@ -109,8 +116,13 @@ fn run_app(
     Ok(())
 }
 
-fn render_ui(f: &mut ratatui::Frame, editor: &mut Editor, file_explorer: &mut FileExplorer) {
-    let area = f.size();
+fn render_ui(
+    f: &mut ratatui::Frame,
+    editor: &mut Editor,
+    file_explorer: &mut FileExplorer,
+    command_bar: &CommandBar,
+) {
+    let area = f.area();
     if file_explorer.open {
         file_explorer.render(f, area);
     } else {
@@ -120,7 +132,7 @@ fn render_ui(f: &mut ratatui::Frame, editor: &mut Editor, file_explorer: &mut Fi
                 Constraint::Min(1),    // Editor area
                 Constraint::Length(1), // Command description
                 Constraint::Length(1), // Status bar / Command bar
-                Constraint::Length(1), // Suggestions
+                Constraint::Length(1), // Error message
             ])
             .split(area);
 
@@ -132,9 +144,11 @@ fn render_ui(f: &mut ratatui::Frame, editor: &mut Editor, file_explorer: &mut Fi
         editor.set_viewport((editor_chunks[1].width as usize, chunks[0].height as usize));
         render_gutter(f, editor, editor_chunks[0]);
         render_content(f, editor, editor_chunks[1]);
-        render_command_description(f, editor, chunks[1]);
-        render_status_line(f, editor, chunks[2]);
-        render_autocomplete_suggestions(f, editor, chunks[3]);
+        render_command_description(f, command_bar, chunks[1]);
+        render_status_line(f, editor, command_bar, chunks[2]);
+        render_autocomplete_suggestions(f, command_bar, chunks[3]);
+        error_handler::render_error(f, chunks[2]);
+        // help_handler::render_help(f, chunks[4]);
 
         // Handle Option types for cursor position and scroll offset
         if let (Some((cursor_line, cursor_column)), Some((scroll_x, scroll_y))) = (
@@ -143,29 +157,21 @@ fn render_ui(f: &mut ratatui::Frame, editor: &mut Editor, file_explorer: &mut Fi
         ) {
             let cursor_screen_x = (cursor_column as i32 - scroll_x as i32).max(0) as u16;
             let cursor_screen_y = (cursor_line as i32 - scroll_y as i32).max(0) as u16;
-            f.set_cursor(
+            f.set_cursor_position(Position::new(
                 editor_chunks[1].x + cursor_screen_x,
                 chunks[0].y + cursor_screen_y,
-            );
-        }
-
-        // Render the error message
-        if let Some(ref error_message) = editor.error_message {
-            let error_area = chunks[2];
-            let error_paragraph =
-                Paragraph::new(error_message.to_string()).style(Style::default().fg(Color::Red));
-            f.render_widget(error_paragraph, error_area);
+            ));
         }
     }
 }
 
 fn render_command_description(
     f: &mut ratatui::Frame,
-    editor: &Editor,
+    command_bar: &CommandBar,
     area: ratatui::layout::Rect,
 ) {
-    if editor.is_command_bar_active() {
-        if let Some(description) = editor.get_current_command_description() {
+    if command_bar.is_active() {
+        if let Some(description) = command_bar.get_current_command_description() {
             let description_widget =
                 Paragraph::new(description).style(Style::default().fg(Color::Yellow));
             f.render_widget(description_widget, area);
@@ -175,13 +181,13 @@ fn render_command_description(
 
 fn render_autocomplete_suggestions(
     f: &mut ratatui::Frame,
-    editor: &Editor,
+    command_bar: &CommandBar,
     area: ratatui::layout::Rect,
 ) {
-    if editor.is_command_bar_active() {
-        let suggestions = editor.command_bar.get_suggestions();
-        let current_index = editor.get_suggestion_index();
-        let page = editor.suggestion_page;
+    if command_bar.is_active() {
+        let suggestions = command_bar.get_suggestions();
+        let current_index = command_bar.get_suggestion_index();
+        let page = command_bar.suggestion_page;
         let total_pages = (suggestions.len() + SUGGESTIONS_PER_PAGE - 1) / SUGGESTIONS_PER_PAGE;
 
         let start_index = page * SUGGESTIONS_PER_PAGE;
@@ -240,23 +246,68 @@ fn render_gutter(f: &mut ratatui::Frame, editor: &Editor, area: ratatui::layout:
 
 fn render_content(f: &mut ratatui::Frame, editor: &Editor, area: ratatui::layout::Rect) {
     if let Some(content) = editor.get_visible_content() {
-        let paragraph = Paragraph::new(content).block(Block::default());
+        let selection = editor.get_selection();
+        let lines: Vec<Line> = content
+            .lines()
+            .enumerate()
+            .map(|(line_idx, line)| {
+                if let Some((start, end)) = selection {
+                    let line_start = editor
+                        .get_current_buffer()
+                        .unwrap()
+                        .content
+                        .line_to_char(line_idx);
+                    let line_end = line_start + line.len();
+
+                    if line_start < end && line_end > start {
+                        let sel_start = start.saturating_sub(line_start);
+                        let sel_end = (end - line_start).min(line.len());
+
+                        let mut spans = Vec::new();
+                        if sel_start > 0 {
+                            spans.push(Span::raw(&line[..sel_start]));
+                        }
+                        spans.push(Span::styled(
+                            &line[sel_start..sel_end],
+                            Style::default().bg(Color::Gray).fg(Color::Black),
+                        ));
+                        if sel_end < line.len() {
+                            spans.push(Span::raw(&line[sel_end..]));
+                        }
+                        Line::from(spans)
+                    } else {
+                        Line::from(line.to_string())
+                    }
+                } else {
+                    Line::from(line.to_string())
+                }
+            })
+            .collect();
+
+        let paragraph =
+            ratatui::widgets::Paragraph::new(lines).block(ratatui::widgets::Block::default());
         f.render_widget(paragraph, area);
     } else {
-        let paragraph = Paragraph::new("").block(Block::default());
+        let paragraph =
+            ratatui::widgets::Paragraph::new("").block(ratatui::widgets::Block::default());
         f.render_widget(paragraph, area);
     }
 }
 
-fn render_status_line(f: &mut ratatui::Frame, editor: &Editor, area: ratatui::layout::Rect) {
+fn render_status_line(
+    f: &mut ratatui::Frame,
+    editor: &Editor,
+    command_bar: &CommandBar,
+    area: ratatui::layout::Rect,
+) {
     let mode_text = format!(" {} ", editor.get_mode());
     let cursor_info = match editor.get_cursor_screen_position() {
         Some((line, column)) => format!("{}:{} ", line + 1, column + 1),
         None => String::from("No active buffer "),
     };
 
-    let status_text = if editor.is_command_bar_active() {
-        format!(":{}", editor.get_command_bar_input())
+    let status_text = if command_bar.is_active() {
+        format!(":{}", command_bar.get_input())
     } else {
         let available_width = area.width as usize;
         let mode_width = mode_text.len();
@@ -281,17 +332,19 @@ fn render_status_line(f: &mut ratatui::Frame, editor: &Editor, area: ratatui::la
 fn handle_input(
     editor: &mut Editor,
     file_explorer: &mut FileExplorer,
+    command_bar: &mut CommandBar,
     key: event::KeyEvent,
 ) -> Result<bool, Box<dyn Error>> {
-    editor.clear_error_message();
+    clear_error();
     file_explorer.clear_error_message();
 
     if file_explorer.open {
         handle_file_explorer_input(editor, file_explorer, key)
     } else {
         match editor.get_mode() {
-            Mode::Normal => handle_normal_mode(editor, file_explorer, key),
+            Mode::Normal => handle_normal_mode(editor, file_explorer, command_bar, key),
             Mode::Insert => handle_insert_mode(editor, key),
+            Mode::Visual => handle_visual_mode(editor, key),
         }
     }
 }
@@ -363,57 +416,60 @@ fn handle_file_explorer_input(
 fn handle_normal_mode(
     editor: &mut Editor,
     file_explorer: &mut FileExplorer,
+    command_bar: &mut CommandBar,
     key: event::KeyEvent,
 ) -> Result<bool, Box<dyn Error>> {
-    if editor.is_command_bar_active() {
+    if command_bar.is_active() {
         match key.code {
-            KeyCode::Char(':') if editor.get_command_bar_input().is_empty() => Ok(false),
+            KeyCode::Char(':') if command_bar.get_input().is_empty() => Ok(false),
             KeyCode::Char(c) => {
-                editor.command_bar_input(c);
-                editor.reset_suggestion_index();
-                editor.reset_to_original_input();
+                command_bar.input(c);
+                command_bar.reset_suggestion_index();
                 Ok(false)
             }
             KeyCode::Backspace => {
-                editor.command_bar_backspace();
-                editor.reset_suggestion_index();
-                editor.reset_to_original_input();
+                command_bar.backspace();
+                command_bar.reset_suggestion_index();
                 Ok(false)
             }
             KeyCode::Tab => {
-                editor.cycle_suggestion(true);
+                command_bar.cycle_suggestion(true);
                 Ok(false)
             }
             KeyCode::BackTab => {
-                editor.cycle_suggestion(false);
+                command_bar.cycle_suggestion(false);
                 Ok(false)
             }
             KeyCode::Right => {
-                editor.next_suggestion_page();
+                command_bar.next_suggestion_page();
                 Ok(false)
             }
             KeyCode::Left => {
-                editor.prev_suggestion_page();
+                command_bar.prev_suggestion_page();
                 Ok(false)
             }
             KeyCode::Enter => {
-                let result = editor.execute_command();
-                editor.command_bar_deactivate();
-                editor.reset_suggestion_index();
+                let result = command_bar.execute_command(editor);
+                command_bar.deactivate();
+                command_bar.reset_suggestion_index();
                 result
             }
             KeyCode::Esc => {
-                editor.command_bar_deactivate();
-                editor.reset_suggestion_index();
+                command_bar.deactivate();
+                command_bar.reset_suggestion_index();
                 Ok(false)
             }
             _ => Ok(false),
         }
     } else {
         match (key.modifiers, key.code) {
+            (KeyModifiers::NONE, KeyCode::Char('v')) => {
+                editor.enter_visual_mode();
+                Ok(false)
+            }
             (KeyModifiers::NONE, KeyCode::Char(':')) => {
-                editor.command_bar_activate();
-                editor.reset_suggestion_index();
+                command_bar.activate();
+                command_bar.reset_suggestion_index();
                 Ok(false)
             }
             (KeyModifiers::NONE, KeyCode::Char('i')) => {
@@ -459,6 +515,53 @@ fn handle_normal_mode(
             }
             _ => Ok(false),
         }
+    }
+}
+
+fn handle_visual_mode(editor: &mut Editor, key: event::KeyEvent) -> Result<bool, Box<dyn Error>> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Esc) => {
+            editor.exit_visual_mode();
+            Ok(false)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('d')) => {
+            editor.delete_selection();
+            editor.exit_visual_mode();
+            Ok(false)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('y')) => {
+            if let Some(selected_text) = editor.copy_selection() {
+                editor.copy_to_clipboard(&selected_text)?;
+                set_error("Copied to clipboard successfully.".to_string());
+            }
+            editor.exit_visual_mode();
+            Ok(false)
+        }
+        (KeyModifiers::NONE, KeyCode::Left) => {
+            editor.move_cursor(CursorMovement::Left);
+            Ok(false)
+        }
+        (KeyModifiers::NONE, KeyCode::Right) => {
+            editor.move_cursor(CursorMovement::Right);
+            Ok(false)
+        }
+        (KeyModifiers::NONE, KeyCode::Up) => {
+            editor.move_cursor(CursorMovement::Up);
+            Ok(false)
+        }
+        (KeyModifiers::NONE, KeyCode::Down) => {
+            editor.move_cursor(CursorMovement::Down);
+            Ok(false)
+        }
+        (KeyModifiers::NONE, KeyCode::Home) => {
+            editor.move_cursor(CursorMovement::LineStart);
+            Ok(false)
+        }
+        (KeyModifiers::NONE, KeyCode::End) => {
+            editor.move_cursor(CursorMovement::LineEnd);
+            Ok(false)
+        }
+        _ => Ok(false),
     }
 }
 
