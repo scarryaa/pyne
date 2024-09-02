@@ -123,6 +123,17 @@ fn run_app(
                         (KeyModifiers::NONE, KeyCode::Char('q')) => break,
                         (KeyModifiers::NONE, KeyCode::Char('i')) => editor.set_mode(Mode::Insert),
                         (KeyModifiers::SHIFT, KeyCode::Char('D')) => editor.toggle_debug_info(),
+                        (KeyModifiers::NONE, KeyCode::Left) => {
+                            editor.move_cursor(CursorMovement::Left)
+                        }
+                        (KeyModifiers::NONE, KeyCode::Right) => {
+                            editor.move_cursor(CursorMovement::Right)
+                        }
+                        (KeyModifiers::NONE, KeyCode::Up) => editor.move_cursor(CursorMovement::Up),
+                        (KeyModifiers::NONE, KeyCode::Down) => {
+                            editor.move_cursor(CursorMovement::Down)
+                        }
+
                         _ => {}
                     },
                     Mode::Insert => match key.code {
