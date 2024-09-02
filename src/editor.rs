@@ -1,4 +1,4 @@
-use crate::{cursor_movement::CursorMovement, mode::Mode};
+use crate::{command_bar::CommandBar, cursor_movement::CursorMovement, mode::Mode};
 use ropey::Rope;
 use std::{collections::HashMap, env, error::Error, fs, io, path::PathBuf};
 
@@ -8,6 +8,7 @@ pub struct Buffer {
     scroll_offset: (usize, usize),
     is_modified: bool,
 }
+
 impl Buffer {
     fn new() -> Self {
         Self {
@@ -27,6 +28,9 @@ pub struct Editor {
     buffers: HashMap<PathBuf, Buffer>,
     current_buffer: Option<PathBuf>,
     starting_directory: Option<PathBuf>,
+    command_bar: CommandBar,
+    original_command_input: String,
+    suggestion_index: usize,
 }
 
 impl Editor {
@@ -39,6 +43,143 @@ impl Editor {
             buffers: HashMap::new(),
             current_buffer: None,
             starting_directory: None,
+            command_bar: CommandBar::new(),
+            original_command_input: "".to_string(),
+            suggestion_index: 0,
+        }
+    }
+
+    pub fn get_suggestion_index(&self) -> usize {
+        self.suggestion_index
+    }
+
+    pub fn set_suggestion_index(&mut self, index: usize) {
+        self.suggestion_index = index;
+    }
+
+    pub fn reset_suggestion_index(&mut self) {
+        self.suggestion_index = 0;
+    }
+
+    pub fn cycle_suggestion(&mut self, forward: bool) {
+        let suggestions = self.get_command_bar_suggestions();
+        if !suggestions.is_empty() {
+            if forward {
+                self.suggestion_index = (self.suggestion_index + 1) % suggestions.len();
+            } else {
+                self.suggestion_index =
+                    (self.suggestion_index + suggestions.len() - 1) % suggestions.len();
+            }
+            // Update the command bar input, but keep the original input
+            self.original_command_input = self.command_bar.get_input().to_string();
+            let new_input = format!("{}", suggestions[self.suggestion_index]);
+            self.command_bar.set_input(new_input);
+        }
+    }
+
+    pub fn reset_to_original_input(&mut self) {
+        self.command_bar
+            .set_input(self.original_command_input.clone());
+        self.suggestion_index = 0;
+    }
+
+    pub fn command_bar_input(&mut self, c: char) {
+        self.command_bar.input(c);
+        self.original_command_input = self.command_bar.get_input().to_string();
+        self.command_bar.update_suggestions();
+        self.suggestion_index = 0;
+    }
+
+    pub fn command_bar_backspace(&mut self) {
+        self.command_bar.backspace();
+        self.original_command_input = self.command_bar.get_input().to_string();
+        self.command_bar.update_suggestions();
+        self.suggestion_index = 0;
+    }
+
+    pub fn save_file(&mut self, path: &PathBuf) -> io::Result<()> {
+        if let Some(buffer) = self.get_current_buffer_mut() {
+            let content = buffer.content.to_string();
+            fs::write(path, content)?;
+            buffer.is_modified = false;
+
+            // Update the current buffer path if it's a new file
+            if self.current_buffer.is_none() || self.current_buffer.as_ref().unwrap() != path {
+                self.current_buffer = Some(path.clone());
+            }
+
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "No active buffer to save",
+            ))
+        }
+    }
+
+    pub fn get_command_bar_suggestions(&self) -> Vec<String> {
+        self.command_bar.get_suggestions().to_vec()
+    }
+
+    pub fn set_command_bar_input(&mut self, input: String) {
+        self.command_bar.set_input(input);
+        self.command_bar.update_suggestions();
+    }
+
+    pub fn command_bar_activate(&mut self) {
+        self.command_bar.activate();
+        self.command_bar.update_suggestions();
+    }
+
+    pub fn command_bar_deactivate(&mut self) {
+        self.command_bar.deactivate();
+    }
+
+    pub fn is_command_bar_active(&self) -> bool {
+        self.command_bar.is_active()
+    }
+
+    pub fn get_command_bar_input(&self) -> &str {
+        self.command_bar.get_input()
+    }
+
+    pub fn execute_command(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
+        let command = self.command_bar.take_input();
+        let result = self.process_command(&command);
+        self.command_bar.deactivate();
+        result
+    }
+
+    fn process_command(&mut self, command: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        match command {
+            "q" => {
+                if self.has_unsaved_changes() {
+                    self.show_error("Unsaved changes. Use :q! to force quit.".to_string());
+                    Ok(false)
+                } else {
+                    Ok(true) // Signal to quit the application
+                }
+            }
+            "q!" => Ok(true), // Force quit
+            "w" => {
+                if let Some(path) = self.get_current_file_path() {
+                    self.save_file(&path)?;
+                    self.show_error("File saved successfully.".to_string());
+                } else {
+                    self.show_error("No file path set. Use :w <filename> to save.".to_string());
+                }
+                Ok(false)
+            }
+            cmd if cmd.starts_with("w ") => {
+                let path = PathBuf::from(&cmd[2..]);
+                self.save_file(&path)?;
+                self.show_error("File saved successfully.".to_string());
+                Ok(false)
+            }
+            _ => {
+                self.show_error(format!("Unknown command: {}", command));
+                Ok(false)
+            }
         }
     }
 
