@@ -11,9 +11,7 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
 
@@ -31,7 +29,7 @@ jobs:
 
     - name: Run tests
       run: cargo test --verbose
-  
+
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v3.2.1
       with:
@@ -43,7 +41,7 @@ jobs:
       id: create_release
       uses: actions/create-release@v1
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.PAT }}
       with:
         tag_name: v${{ env.VERSION }}
         release_name: "Release v${{ env.VERSION }}"
@@ -53,7 +51,7 @@ jobs:
     - name: Upload Release Assets
       uses: actions/upload-release-asset@v1
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.PAT }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: target/release
