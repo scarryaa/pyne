@@ -1,3 +1,5 @@
+use std::{io, path::PathBuf};
+
 use crate::{cursor_movement::CursorMovement, mode::Mode};
 use ropey::Rope;
 
@@ -130,25 +132,34 @@ impl Editor {
         let (scroll_x, scroll_y) = self.scroll_offset;
         let (viewport_width, viewport_height) = self.viewport;
         let max_line_idx = self.content.len_lines().min(scroll_y + viewport_height);
-
         (scroll_y..max_line_idx)
             .map(|line_idx| {
                 let line = self.content.line(line_idx);
-                let visible_line: String = if line.len_chars() > 0 {
+                let line_length = line.len_chars();
+                let visible_start = scroll_x.min(line_length.saturating_sub(1));
+                let visible_end = (scroll_x + viewport_width).min(line_length);
+
+                let visible_line: String = if line_length > 0 {
                     line.chars()
-                        .skip(scroll_x.min(line.len_chars() - 1))
+                        .skip(visible_start)
                         .take(viewport_width)
                         .collect()
                 } else {
                     String::new()
                 };
 
+                let has_newline = line.chars().skip(visible_end).any(|c| c == '\n');
+
                 if line_idx == self.cursor_pos_to_line() {
-                    visible_line
-                } else if scroll_x >= line.len_chars().saturating_sub(1)
-                    && line.len_chars() < viewport_width
-                {
+                    if has_newline {
+                        format!("{}\n", visible_line)
+                    } else {
+                        visible_line
+                    }
+                } else if scroll_x >= line_length.saturating_sub(1) {
                     String::from("\n")
+                } else if has_newline {
+                    format!("{}\n", visible_line)
                 } else {
                     format!("{}\n", visible_line.trim_end())
                 }
@@ -212,6 +223,14 @@ impl Editor {
             let next_line_len = self.content.line(next_line).len_chars();
             self.cursor_pos = next_line_start + cur_col.min(next_line_len);
         }
+    }
+
+    pub fn open_file(&mut self, path: &PathBuf) -> io::Result<()> {
+        let content = std::fs::read_to_string(path)?;
+        self.content = Rope::from_str(&content);
+        self.cursor_pos = 0;
+        self.scroll_offset = (0, 0);
+        Ok(())
     }
 
     pub fn toggle_debug_info(&mut self) {

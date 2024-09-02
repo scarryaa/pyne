@@ -3,6 +3,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use file_explorer::FileExplorer;
 use ratatui::{
     backend::CrosstermBackend,
     crossterm,
@@ -27,8 +28,9 @@ use mode::Mode;
 fn main() -> Result<(), Box<dyn Error>> {
     let mut terminal = setup_terminal()?;
     let mut editor = Editor::new();
+    let mut file_explorer = FileExplorer::new(&std::env::current_dir()?)?;
 
-    let result = run_app(&mut terminal, &mut editor);
+    let result = run_app(&mut terminal, &mut editor, &mut file_explorer);
 
     restore_terminal(&mut terminal)?;
     if let Err(err) = result {
@@ -62,12 +64,13 @@ fn restore_terminal(
 fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     editor: &mut Editor,
+    file_explorer: &mut FileExplorer,
 ) -> Result<(), Box<dyn Error>> {
     loop {
-        terminal.draw(|f| render_ui(f, editor))?;
+        terminal.draw(|f| render_ui(f, editor, file_explorer))?;
 
         if let Event::Key(key) = event::read()? {
-            if handle_input(editor, key)? {
+            if handle_input(editor, file_explorer, key)? {
                 break;
             }
         }
@@ -75,38 +78,42 @@ fn run_app(
     Ok(())
 }
 
-fn render_ui(f: &mut ratatui::Frame, editor: &mut Editor) {
-    let area = f.area();
+fn render_ui(f: &mut ratatui::Frame, editor: &mut Editor, file_explorer: &mut FileExplorer) {
+    let area = f.size();
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
-        .split(area);
+    if file_explorer.open {
+        file_explorer.render(f, area);
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(area);
 
-    let editor_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(6), Constraint::Min(1)])
-        .split(chunks[0]);
+        let editor_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(6), Constraint::Min(1)])
+            .split(chunks[0]);
 
-    editor.set_viewport((editor_chunks[1].width as usize, chunks[0].height as usize));
+        editor.set_viewport((editor_chunks[1].width as usize, chunks[0].height as usize));
 
-    render_gutter(f, editor, editor_chunks[0]);
-    render_content(f, editor, editor_chunks[1]);
-    render_status_line(f, editor, chunks[1]);
-    render_debug_info(f, editor, chunks[2]);
+        render_gutter(f, editor, editor_chunks[0]);
+        render_content(f, editor, editor_chunks[1]);
+        render_status_line(f, editor, chunks[1]);
+        render_debug_info(f, editor, chunks[2]);
 
-    let (cursor_line, cursor_column) = editor.get_cursor_screen_position();
-    let (scroll_x, scroll_y) = editor.get_scroll_offset();
-    let cursor_screen_x = (cursor_column as i32 - scroll_x as i32).max(0) as u16;
-    let cursor_screen_y = (cursor_line as i32 - scroll_y as i32).max(0) as u16;
-    f.set_cursor(
-        editor_chunks[1].x + cursor_screen_x,
-        chunks[0].y + cursor_screen_y,
-    );
+        let (cursor_line, cursor_column) = editor.get_cursor_screen_position();
+        let (scroll_x, scroll_y) = editor.get_scroll_offset();
+        let cursor_screen_x = (cursor_column as i32 - scroll_x as i32).max(0) as u16;
+        let cursor_screen_y = (cursor_line as i32 - scroll_y as i32).max(0) as u16;
+        f.set_cursor(
+            editor_chunks[1].x + cursor_screen_x,
+            chunks[0].y + cursor_screen_y,
+        );
+    }
 }
 
 fn render_gutter(f: &mut ratatui::Frame, editor: &Editor, area: ratatui::layout::Rect) {
@@ -153,18 +160,91 @@ fn render_debug_info(f: &mut ratatui::Frame, editor: &Editor, area: ratatui::lay
     }
 }
 
-fn handle_input(editor: &mut Editor, key: event::KeyEvent) -> Result<bool, Box<dyn Error>> {
-    match editor.get_mode() {
-        Mode::Normal => handle_normal_mode(editor, key),
-        Mode::Insert => handle_insert_mode(editor, key),
+fn handle_input(
+    editor: &mut Editor,
+    file_explorer: &mut FileExplorer,
+    key: event::KeyEvent,
+) -> Result<bool, Box<dyn Error>> {
+    if file_explorer.open {
+        handle_file_explorer_input(editor, file_explorer, key)
+    } else {
+        match editor.get_mode() {
+            Mode::Normal => handle_normal_mode(editor, file_explorer, key),
+            Mode::Insert => handle_insert_mode(editor, key),
+        }
     }
 }
 
-fn handle_normal_mode(editor: &mut Editor, key: event::KeyEvent) -> Result<bool, Box<dyn Error>> {
+fn handle_file_explorer_input(
+    editor: &mut Editor,
+    file_explorer: &mut FileExplorer,
+    key: event::KeyEvent,
+) -> Result<bool, Box<dyn Error>> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Char('/')) if !file_explorer.is_in_search_mode() => {
+            file_explorer.enter_search_mode();
+        }
+        (KeyModifiers::NONE, KeyCode::Enter) => {
+            if let Some(path) = file_explorer.enter_directory()? {
+                file_explorer.open = false;
+                editor.open_file(&path)?;
+            }
+        }
+        (KeyModifiers::NONE, KeyCode::Esc) => {
+            if file_explorer.is_in_search_mode() {
+                file_explorer.exit_search_mode()?;
+            } else {
+                file_explorer.open = false;
+            }
+        }
+        (KeyModifiers::NONE, KeyCode::Up) => file_explorer.move_selection(-1)?,
+        (KeyModifiers::NONE, KeyCode::Down) => file_explorer.move_selection(1)?,
+        (KeyModifiers::NONE, KeyCode::Left) => {
+            if !file_explorer.is_in_search_mode() {
+                file_explorer.go_up()?;
+            }
+        }
+        (KeyModifiers::NONE, KeyCode::Right) => {
+            if !file_explorer.is_in_search_mode() {
+                if let Some(path) = file_explorer.enter_directory()? {
+                    file_explorer.open = false;
+                    editor.open_file(&path)?;
+                }
+            }
+        }
+        (KeyModifiers::NONE, KeyCode::Backspace) => {
+            if file_explorer.is_in_search_mode() {
+                file_explorer.handle_search_backspace()?;
+            } else {
+                file_explorer.go_up()?;
+            }
+        }
+        (KeyModifiers::SHIFT, KeyCode::Char('G')) => {
+            file_explorer.toggle_global_search()?;
+        }
+        (KeyModifiers::NONE, KeyCode::Char(c)) => {
+            if file_explorer.is_in_search_mode() {
+                file_explorer.handle_search_input(c)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_normal_mode(
+    editor: &mut Editor,
+    file_explorer: &mut FileExplorer,
+    key: event::KeyEvent,
+) -> Result<bool, Box<dyn Error>> {
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Char('q')) => Ok(true),
         (KeyModifiers::NONE, KeyCode::Char('i')) => {
             editor.set_mode(Mode::Insert);
+            Ok(false)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('f')) => {
+            file_explorer.open = true;
             Ok(false)
         }
         (KeyModifiers::SHIFT, KeyCode::Char('D')) => {

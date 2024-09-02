@@ -1,8 +1,8 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 use std::io::{self, Read};
@@ -13,6 +13,7 @@ use std::{
 };
 
 pub struct FileExplorer {
+    starting_path: PathBuf,
     current_path: PathBuf,
     entries: Vec<PathBuf>,
     list_state: ListState,
@@ -26,6 +27,7 @@ pub struct FileExplorer {
 impl FileExplorer {
     pub fn new(initial_path: &Path) -> io::Result<Self> {
         let mut explorer = FileExplorer {
+            starting_path: initial_path.to_path_buf(),
             current_path: initial_path.to_path_buf(),
             entries: Vec::new(),
             list_state: ListState::default(),
@@ -39,35 +41,49 @@ impl FileExplorer {
         Ok(explorer)
     }
 
-    pub fn toggle_search_mode(&mut self) -> io::Result<()> {
-        self.search_mode = !self.search_mode;
-        if !self.search_mode {
-            self.search_query.clear();
-            self.refresh_entries()?;
+    fn get_relative_path(&self) -> String {
+        match self.current_path.strip_prefix(&self.starting_path) {
+            Ok(rel_path) => rel_path.display().to_string(),
+            Err(_) => self.current_path.display().to_string(),
         }
-        Ok(())
-    }
-
-    pub fn toggle_global_search(&mut self) -> io::Result<()> {
-        self.global_search = !self.global_search;
-        if !self.search_query.is_empty() {
-            self.update_search()?;
-        }
-        Ok(())
     }
 
     pub fn is_in_search_mode(&self) -> bool {
         self.search_mode
     }
 
+    pub fn search_empty(&self) -> bool {
+        self.search_query.to_string().len() == 0
+    }
+
+    pub fn toggle_global_search(&mut self) -> io::Result<()> {
+        self.global_search = !self.global_search;
+        self.update_search()
+    }
+
     pub fn handle_search_input(&mut self, c: char) -> io::Result<()> {
+        if !self.search_mode {
+            self.search_mode = true;
+            self.search_query.clear();
+        }
         self.search_query.push(c);
         self.update_search()
     }
 
     pub fn handle_search_backspace(&mut self) -> io::Result<()> {
-        self.search_query.pop();
-        self.update_search()
+        if self.search_mode {
+            self.search_query.pop();
+            self.update_search()
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn clear_search(&mut self) -> io::Result<()> {
+        self.search_mode = false;
+        self.search_query.clear();
+        self.global_search = false;
+        self.refresh_entries()
     }
 
     fn update_search(&mut self) -> io::Result<()> {
@@ -121,22 +137,6 @@ impl FileExplorer {
         Ok(results)
     }
 
-    pub fn open_file(&self) -> Option<PathBuf> {
-        if let Some(selected_index) = self.list_state.selected() {
-            if let Some(selected_path) = self.entries.get(selected_index) {
-                if selected_path.is_file() {
-                    return Some(selected_path.clone());
-                }
-            }
-        }
-        None
-    }
-
-    pub fn clear_search(&mut self) -> io::Result<()> {
-        self.search_query.clear();
-        self.refresh_entries()
-    }
-
     fn refresh_entries(&mut self) -> io::Result<()> {
         self.entries.clear();
         for entry in fs::read_dir(&self.current_path)? {
@@ -181,21 +181,34 @@ impl FileExplorer {
     }
 
     pub fn enter_directory(&mut self) -> io::Result<Option<PathBuf>> {
-        if let Some(selected_index) = self.list_state.selected() {
-            if let Some(selected_path) = self.entries.get(selected_index) {
-                if selected_path.is_dir() {
-                    self.current_path = fs::canonicalize(selected_path)?;
-                    self.refresh_entries()?;
-                    Ok(None)
-                } else {
-                    Ok(Some(selected_path.clone()))
-                }
-            } else {
+        let selected_path = self
+            .list_state
+            .selected()
+            .and_then(|index| self.entries.get(index).cloned());
+
+        if let Some(path) = selected_path {
+            if path.is_dir() {
+                self.current_path = fs::canonicalize(path)?;
+                self.refresh_entries()?;
+                self.clear_search()?;
                 Ok(None)
+            } else {
+                self.clear_search()?;
+                Ok(Some(path))
             }
         } else {
             Ok(None)
         }
+    }
+
+    pub fn enter_search_mode(&mut self) {
+        self.search_mode = true;
+        self.search_query.clear();
+    }
+
+    pub fn exit_search_mode(&mut self) -> io::Result<()> {
+        self.search_mode = false;
+        self.clear_search()
     }
 
     pub fn go_up(&mut self) -> io::Result<()> {
@@ -265,6 +278,15 @@ impl FileExplorer {
     }
 
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
+        let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(3),    // Main content
+                Constraint::Length(1), // Instruction bar
+                Constraint::Length(1), // Spacer
+            ])
+            .split(area);
+
         let centered_area = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -272,7 +294,7 @@ impl FileExplorer {
                 Constraint::Percentage(90),
                 Constraint::Percentage(5),
             ])
-            .split(area)[1]; // Use the middle 90%
+            .split(main_layout[0])[1]; // Use the middle 90%
 
         let centered_area = Layout::default()
             .direction(Direction::Horizontal)
@@ -286,12 +308,20 @@ impl FileExplorer {
         let explorer_area = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
+                Constraint::Length(3), // Path display
                 Constraint::Min(0),    // File list and preview
                 Constraint::Length(3), // Search bar
             ])
             .split(centered_area);
 
-        let main_area = explorer_area[0];
+        // Render path
+        let relative_path = self.get_relative_path();
+        let path_display = Paragraph::new(relative_path)
+            .style(Style::default().fg(Color::Green))
+            .block(Block::default().borders(Borders::ALL).title("Current Path"));
+        f.render_widget(path_display, explorer_area[0]);
+
+        let main_area = explorer_area[1];
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(45), Constraint::Percentage(55)].as_ref())
@@ -307,9 +337,30 @@ impl FileExplorer {
             "Filename"
         };
         let search_bar = Paragraph::new(format!("Search ({search_mode}): {}", self.search_query))
-            .style(Style::default().fg(Color::Yellow))
+            .style(Style::default().fg(if self.is_in_search_mode() {
+                Color::Yellow
+            } else {
+                Color::White
+            }))
             .block(Block::default().borders(Borders::ALL));
-        f.render_widget(search_bar, explorer_area[1]);
+        f.render_widget(search_bar, explorer_area[2]);
+
+        // Render instruction bar with wrapping
+        let instructions =
+        " / - Search | ESC - Exit | ↑↓ - Navigate | ENTER - Select | G - Toggle Global Search | BACKSPACE - Previous Directory";
+        let instruction_bar = Paragraph::new(instructions)
+            .style(
+                Style::default()
+                    .bg(Color::from_u32(0x202020))
+                    .fg(Color::White),
+            )
+            .wrap(Wrap { trim: false }); // Enable text wrapping
+        f.render_widget(instruction_bar, main_layout[1]);
+    }
+
+    pub fn close(&mut self) -> io::Result<()> {
+        self.open = false;
+        self.clear_search()
     }
 
     fn render_file_list(&mut self, f: &mut Frame, area: Rect) {
@@ -348,9 +399,8 @@ impl FileExplorer {
             })
             .collect();
 
-        let title = format!("Files - {}", self.current_path.to_string_lossy());
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(title))
+            .block(Block::default().borders(Borders::ALL).title("Files"))
             .highlight_style(Style::default().fg(Color::Yellow));
 
         f.render_stateful_widget(list, area, &mut self.list_state);
