@@ -134,10 +134,16 @@ impl Editor {
         (scroll_y..max_line_idx)
             .map(|line_idx| {
                 let line = self.content.line(line_idx);
-                let visible_line: String =
-                    line.chars().skip(scroll_x).take(viewport_width).collect();
+                let visible_line: String = if line.len_chars() > 0 {
+                    line.chars()
+                        .skip(scroll_x.min(line.len_chars() - 1))
+                        .take(viewport_width)
+                        .collect()
+                } else {
+                    String::new()
+                };
 
-                if line_idx == self.cursor_pos {
+                if line_idx == self.cursor_pos_to_line() {
                     visible_line
                 } else if scroll_x >= line.len_chars().saturating_sub(1)
                     && line.len_chars() < viewport_width

@@ -15,6 +15,7 @@ use std::{error::Error, io};
 
 mod cursor_movement;
 mod editor;
+mod file_explorer;
 mod gutter;
 mod mode;
 
