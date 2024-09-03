@@ -24,6 +24,9 @@ jobs:
       id: cargo_version
       run: echo "VERSION=$(grep '^version' Cargo.toml | head -1 | awk -F ' = ' '{ print $2 }' | tr -d '\"')" >> $GITHUB_ENV
 
+    - name: Install libpcap
+      run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+
     - name: Build
       run: cargo build --verbose --release
 
