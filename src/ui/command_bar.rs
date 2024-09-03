@@ -1,4 +1,4 @@
-use crate::{editor::Editor, error_handler::set_error, help_handler::set_help_topic};
+use crate::{editor::Editor, utils::error_handler::set_error, utils::help_handler::set_help_topic};
 use std::path::PathBuf;
 
 const SUGGESTIONS_PER_PAGE: usize = 5;

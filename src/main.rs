@@ -6,6 +6,10 @@ use crossterm::{
 };
 use error_handler::{clear_error, set_error};
 use file_explorer::FileExplorer;
+use pyne::{
+    ui::command_bar,
+    utils::{error_handler, file_explorer},
+};
 use ratatui::{
     backend::CrosstermBackend,
     crossterm,
@@ -19,20 +23,10 @@ use std::{env, error::Error, io, path::PathBuf};
 
 const SUGGESTIONS_PER_PAGE: usize = 5;
 
-mod buffer;
-mod command_bar;
-mod cursor_movement;
-mod editor;
-mod error_handler;
-mod file_explorer;
-mod gutter;
-mod help_handler;
-mod mode;
-
-use cursor_movement::CursorMovement;
-use editor::Editor;
-use gutter::Gutter;
-use mode::Mode;
+use pyne::editor::cursor_movement::CursorMovement;
+use pyne::editor::mode::Mode;
+use pyne::editor::Editor;
+use pyne::ui::gutter::Gutter;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut terminal = setup_terminal()?;

@@ -12,7 +12,7 @@ use std::{
     fs::{self, File},
 };
 
-use crate::error_handler::{clear_error, set_error};
+use crate::utils::error_handler::{clear_error, set_error};
 
 pub struct FileExplorer {
     starting_path: PathBuf,

@@ -1,12 +1,14 @@
 use crate::{
-    buffer::Buffer,
-    cursor_movement::CursorMovement,
-    error_handler::{clear_error, set_error},
-    mode::Mode,
+    editor::buffer::Buffer, editor::cursor_movement::CursorMovement, editor::mode::Mode,
+    utils::error_handler::set_error,
 };
 use clipboard::{ClipboardContext, ClipboardProvider};
 use ropey::Rope;
 use std::{collections::HashMap, env, error::Error, fs, io, path::PathBuf};
+
+mod buffer;
+pub mod cursor_movement;
+pub mod mode;
 
 pub struct Editor {
     mode: Mode,
@@ -117,10 +119,6 @@ impl Editor {
 
     pub fn set_starting_directory(&mut self, path: PathBuf) {
         self.starting_directory = Some(path);
-    }
-
-    pub fn clear_error_message(&mut self) {
-        clear_error();
     }
 
     pub fn get_current_file_path(&self) -> Option<PathBuf> {
